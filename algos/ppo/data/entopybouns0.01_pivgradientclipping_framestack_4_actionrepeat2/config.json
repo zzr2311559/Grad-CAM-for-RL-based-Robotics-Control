@@ -1,0 +1,41 @@
+{
+    "actor_critic":	"CNNActorCritic",
+    "clip_ratio":	0.2,
+    "device":	"mps",
+    "env_fn":	"<function <lambda> at 0x13afd59e0>",
+    "epochs":	200,
+    "exp_name":	"entopybouns0.01_pivgradientclipping_framestack_4_actionrepeat2",
+    "gamma":	0.99,
+    "hidden_sizes":	[
+        512
+    ],
+    "lam":	0.97,
+    "logger":	{
+        "<utils.logx.EpochLogger object at 0x13acccd90>":	{
+            "epoch_dict":	{},
+            "exp_name":	"entopybouns0.01_pivgradientclipping_framestack_4_actionrepeat2",
+            "first_row":	true,
+            "log_current_row":	{},
+            "log_headers":	[],
+            "output_dir":	"data/entopybouns0.01_pivgradientclipping_framestack_4_actionrepeat2",
+            "output_file":	{
+                "<_io.TextIOWrapper name='data/entopybouns0.01_pivgradientclipping_framestack_4_actionrepeat2/progress.txt' mode='w' encoding='UTF-8'>":	{
+                    "mode":	"w"
+                }
+            }
+        }
+    },
+    "logger_kwargs":	{
+        "exp_name":	"entopybouns0.01_pivgradientclipping_framestack_4_actionrepeat2",
+        "output_dir":	"data/entopybouns0.01_pivgradientclipping_framestack_4_actionrepeat2"
+    },
+    "max_ep_len":	1000,
+    "pi_lr":	0.0001,
+    "save_freq":	10,
+    "seed":	51,
+    "steps_per_epoch":	4000,
+    "target_kl":	0.02,
+    "train_pi_iters":	80,
+    "train_v_iters":	80,
+    "vf_lr":	0.001
+}
