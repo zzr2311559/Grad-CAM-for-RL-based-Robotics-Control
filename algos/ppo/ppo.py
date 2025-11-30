@@ -2,11 +2,8 @@ import sys
 import os
 import os.path as osp
 
-# 获取当前脚本的绝对路径
 current_dir = osp.dirname(osp.abspath(__file__))
-# 获取项目根目录 (GradCAMRL/)：从 algos/ppo/ 往上跳两级
 root_dir = osp.join(current_dir, '..', '..')
-# 将根目录加入 Python 搜索路径
 sys.path.append(root_dir)
 
 from collections import deque
@@ -28,60 +25,39 @@ import torch.nn.functional as F
 
 def random_crop(imgs, output_size=84):
     """
-    高性能向量化随机裁剪 (Vectorized Random Crop)
-    使用 grid_sample 实现，完全在 GPU 上并行，无 Python 循环开销。
-    
-    输入: imgs (N, C, H, W)
-    输出: cropped (N, C, output_size, output_size)
+    Input: imgs (N, C, H, W)
+    Output: cropped (N, C, output_size, output_size)
     """
     n, c, h, w = imgs.shape
     crop_max = h - output_size
     
-    # 1. 生成随机偏移量 (N, 1, 1, 2)
-    # w1 (x轴偏移), h1 (y轴偏移)
     w1 = torch.randint(0, crop_max + 1, (n,), device=imgs.device).float()
     h1 = torch.randint(0, crop_max + 1, (n,), device=imgs.device).float()
-    
-    # 2. 构建基础网格 (1, H_out, W_out, 2)
-    # 这里的坐标是像素坐标 [0, output_size-1]
+
     y = torch.arange(output_size, device=imgs.device).float()
     x = torch.arange(output_size, device=imgs.device).float()
     grid_y, grid_x = torch.meshgrid(y, x, indexing='ij')
     
-    # 3. 加上偏移量，得到在原图中的采样坐标
-    # grid_x: (N, H_out, W_out)
     grid_x = grid_x.unsqueeze(0) + w1.view(-1, 1, 1)
     grid_y = grid_y.unsqueeze(0) + h1.view(-1, 1, 1)
     
-    # 4. 归一化坐标到 [-1, 1] (grid_sample 的要求)
-    # 公式: 2 * (x / (W-1)) - 1
-    # 注意：这里分母用 w-1 还是 w 取决于 align_corners 设置，
-    # 对于像素精确裁剪，通常用 2 * (x + 0.5) / W - 1 会更准，但这里简化处理足够了
     norm_grid_x = 2.0 * grid_x / (w - 1.0) - 1.0
     norm_grid_y = 2.0 * grid_y / (h - 1.0) - 1.0
     
-    # 堆叠成 (N, H_out, W_out, 2)
     grid = torch.stack((norm_grid_x, norm_grid_y), dim=-1)
     
-    # 5. 采样
-    # mode='nearest' 保证像素值不被插值模糊，这对于 uint8 类数据很重要
-    # 但由于我们输入已经是 float (0-255)，用 bilinear 也可以
     cropped = F.grid_sample(imgs, grid, mode='bilinear', padding_mode='zeros', align_corners=True)
     
     return cropped
 
 def center_crop(imgs, output_size=84):
-    """
-    中心裁剪：用于推理/收集数据阶段
-    输入: (N, C, H, W) 或 (C, H, W)
-    输出: 中心裁剪后的图片
-    """
-    if len(imgs.shape) == 3: # 单张图片 (C, H, W)
+
+    if len(imgs.shape) == 3:
         h, w = imgs.shape[1], imgs.shape[2]
         start_h = (h - output_size) // 2
         start_w = (w - output_size) // 2
         return imgs[:, start_h:start_h + output_size, start_w:start_w + output_size]
-    else: # Batch (N, C, H, W)
+    else:
         h, w = imgs.shape[2], imgs.shape[3]
         start_h = (h - output_size) // 2
         start_w = (w - output_size) // 2
@@ -99,16 +75,13 @@ class ActionRepeatWrapper:
         total_reward = 0.0
         for _ in range(self._repeat):
             time_step = self._env.step(action)
-            # 累加每一步的奖励
             reward = time_step.reward
             if reward is not None:
                 total_reward += reward
             
-            # 如果中途结束（比如杆子倒了，虽然dm_control通常不死），就提前返回
             if time_step.last():
                 break
         
-        # 返回最后一步的 time_step，但把 reward 替换为累计奖励
         return time_step._replace(reward=total_reward)
 
     def reset(self):
@@ -126,10 +99,7 @@ class FrameStackWrapper:
         self._num_frames = num_frames
         self._frames = deque([], maxlen=num_frames)
         
-        # 获取原始的 pixel spec
         orig_spec = self._env.observation_spec()['pixels']
-        # 新的形状：在通道维度（最后一个维度）叠加
-        # 例如 (84, 84, 3) -> (84, 84, 9)
         new_shape = orig_spec.shape[:-1] + (orig_spec.shape[-1] * num_frames,)
         
         self._obs_spec = specs.BoundedArray(
@@ -144,21 +114,17 @@ class FrameStackWrapper:
         obs = time_step.observation
         pixels = obs['pixels']
         
-        # 如果是第一帧（Reset后），需要把队列填满
         if len(self._frames) == 0:
             for _ in range(self._num_frames):
                 self._frames.append(pixels)
         else:
             self._frames.append(pixels)
             
-        # 在通道维度拼接 (H, W, C) -> (H, W, C*k)
         stacked_pixels = np.concatenate(list(self._frames), axis=-1)
         
-        # 创建新的观测字典（浅拷贝）
         new_obs = obs.copy()
         new_obs['pixels'] = stacked_pixels
         
-        # 返回修改后的 TimeStep
         return time_step._replace(observation=new_obs)
 
     def reset(self):
@@ -180,8 +146,6 @@ class FrameStackWrapper:
     
     def __getattr__(self, name):
         return getattr(self._env, name)
-
-# 简单的替代统计函数（单进程版）
 def statistics_scalar(x, with_min_and_max=False):
     x = np.array(x, dtype=np.float32)
     mean = np.mean(x)
@@ -231,7 +195,6 @@ class PPOBuffer:
         data = dict(obs=self.obs_buf, act=self.act_buf, ret=self.ret_buf,
                     adv=self.adv_buf, logp=self.logp_buf)
         
-        # 关键修改：直接把数据搬运到指定的 device (比如 mps)
         return {k: torch.as_tensor(v, dtype=torch.float32).to(self.device) for k,v in data.items()}
 
 def ppo(env_fn, actor_critic=core.CNNActorCritic, hidden_sizes=(512,), seed=0, 
@@ -239,9 +202,7 @@ def ppo(env_fn, actor_critic=core.CNNActorCritic, hidden_sizes=(512,), seed=0,
         vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
         target_kl=0.02, logger_kwargs=dict(), save_freq=1):
 
-    # change: pi_lr from 3e-4 to 1e-4, target_kl from 0.01 to 0.02
     
-    # 1. 设置设备：优先 MPS，其次 CUDA，最后 CPU
     if torch.backends.mps.is_available():
         device = torch.device("mps")
         print("Using MPS (Apple Silicon) acceleration!")
@@ -266,7 +227,6 @@ def ppo(env_fn, actor_critic=core.CNNActorCritic, hidden_sizes=(512,), seed=0,
     act_spec = env.action_spec()
     
     
-    # 维度转换: (H, W, C) -> (C, H, W)
     #obs_dim = (obs_spec.shape[2], obs_spec.shape[0], obs_spec.shape[1])
     c = obs_spec.shape[2] 
     h_env, w_env = obs_spec.shape[0], obs_spec.shape[1]
@@ -274,8 +234,6 @@ def ppo(env_fn, actor_critic=core.CNNActorCritic, hidden_sizes=(512,), seed=0,
     network_obs_dim = (c, 84, 84) 
     
     act_dim = act_spec.shape
-
-    # 3. 网络初始化并搬运到 Device
     # ac = actor_critic(obs_dim, act_dim, hidden_sizes)
     
     ac = actor_critic(network_obs_dim, act_dim, hidden_sizes)
@@ -283,12 +241,9 @@ def ppo(env_fn, actor_critic=core.CNNActorCritic, hidden_sizes=(512,), seed=0,
     
     ac.to(device)
 
-    # 统计参数量
     var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.v])
     logger.log('\nNumber of parameters: \t pi: %d, \t v: %d\n'%var_counts)
 
-    # Buffer 初始化
-    # 这里的 local_steps_per_epoch 等于 steps_per_epoch (因为去掉了 MPI)
     # buf = PPOBuffer(obs_dim, act_dim, steps_per_epoch, gamma, lam, device=device)
 
     buf = PPOBuffer(buffer_obs_dim, act_dim, steps_per_epoch, gamma, lam, device=device)
@@ -299,7 +254,6 @@ def ppo(env_fn, actor_critic=core.CNNActorCritic, hidden_sizes=(512,), seed=0,
         
         obs = random_crop(obs, output_size=84)
         
-        # obs 已经在 device 上了，可以直接进 ac
         pi, logp = ac.pi(obs, act)
         ratio = torch.exp(logp - logp_old)
         clip_adv = torch.clamp(ratio, 1-clip_ratio, 1+clip_ratio) * adv
@@ -332,7 +286,7 @@ def ppo(env_fn, actor_critic=core.CNNActorCritic, hidden_sizes=(512,), seed=0,
     logger.setup_pytorch_saver(ac)
 
     def update():
-        data = buf.get() # 数据已经搬到 device
+        data = buf.get()
 
         pi_l_old, pi_info_old = compute_loss_pi(data)
         pi_l_old = pi_l_old.item()
@@ -342,7 +296,7 @@ def ppo(env_fn, actor_critic=core.CNNActorCritic, hidden_sizes=(512,), seed=0,
         for i in range(train_pi_iters):
             pi_optimizer.zero_grad()
             loss_pi, pi_info = compute_loss_pi(data)
-            kl = pi_info['kl'] # MPI avg removed
+            kl = pi_info['kl']
             if kl > 1.5 * target_kl:
                 logger.log('Early stopping at step %d due to reaching max kl.'%i)
                 break
@@ -371,35 +325,27 @@ def ppo(env_fn, actor_critic=core.CNNActorCritic, hidden_sizes=(512,), seed=0,
 
     start_time = time.time()
     
-    # 4. 初始 Reset 逻辑修正
-    # env.reset() -> TimeStep -> 提取 pixels -> 转置 -> float32 转换用于存储（或保持uint8）
     time_step = env.reset()
     o = time_step.observation['pixels'].transpose(2,0,1).copy()
     
     ep_ret, ep_len = 0, 0
 
-    # Main loop
     for epoch in range(epochs):
         for t in range(steps_per_epoch):
             
-            # 推理：转 tensor -> 搬到 device
             # obs_tensor = torch.as_tensor(o, dtype=torch.float32).unsqueeze(0).to(device)
             obs_full = torch.as_tensor(o, dtype=torch.float32).unsqueeze(0).to(device)
-            # 再做中心裁剪 (100 -> 84) 喂给网络
             obs_network_input = center_crop(obs_full, output_size=84)
             
             a, v, logp = ac.step(obs_network_input)
             # a, v, logp = ac.step(obs_tensor)
 
-            # 交互
             time_step = env.step(a[0])
             next_o = time_step.observation['pixels'].transpose(2,0,1).copy()
             
             r = time_step.reward
             if r is None: r = 0.0
             
-            # 判断结束
-            # 注意：dm_control 只有 last()，或者我们自己设定的 max_ep_len
             d = time_step.last() 
             
             ep_ret += r
@@ -432,13 +378,11 @@ def ppo(env_fn, actor_critic=core.CNNActorCritic, hidden_sizes=(512,), seed=0,
                 if terminal:
                     logger.store(EpRet=ep_ret, EpLen=ep_len)
                 
-                # 5. 回合结束 Reset 逻辑修正
                 time_step = env.reset()
                 o = time_step.observation['pixels'].transpose(2,0,1).copy()
                 ep_ret, ep_len = 0, 0
 
         if (epoch % save_freq == 0) or (epoch == epochs-1):
-            # dm_control env 无法被简单的 pickle，这里只保存模型
             logger.save_state({}, None) 
             pass
 
@@ -473,12 +417,10 @@ if __name__ == '__main__':
     parser.add_argument('--exp_name', type=str, default='ppo_dmc_cnn')
     args = parser.parse_args()
 
-    # 移除了 mpi_fork
 
     output_dir = os.path.join('data', args.exp_name)
     logger_kwargs = dict(output_dir=output_dir, exp_name=args.exp_name)
 
-    # 修正：actor_critic 传参直接用类名，已经在内部处理了
     ppo(lambda : suite.load(domain_name=args.domain_name, task_name=args.task_name), 
         actor_critic=core.CNNActorCritic,
         hidden_sizes=args.hid, gamma=args.gamma, 

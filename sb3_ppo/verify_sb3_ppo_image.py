@@ -7,19 +7,15 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecFrameStack
 from stable_baselines3.common.monitor import Monitor
 from gymnasium.wrappers import ResizeObservation
 
-# --- 关键修正：导入兼容性处理 ---
+# 解决gym各版本库饮用位置问题
 try:
-    # Gymnasium v1.0+ 新名称
     from gymnasium.wrappers import FrameStackObservation
 except ImportError:
-    # 旧版本兼容
     from gymnasium.wrappers import FrameStack as FrameStackObservation
 
 try:
-    # 尝试导入 RenderObservation (用于获取图像)
     from gymnasium.wrappers import RenderObservation
 except ImportError:
-    # 如果找不到，尝试旧名称 AddRenderObservation
     from gymnasium.wrappers import AddRenderObservation as RenderObservation
         
         
@@ -85,7 +81,7 @@ if __name__ == '__main__':
     # DummyVecEnv 适用于单进程调试，SubprocVecEnv 适用于多核并行
     env = DummyVecEnv([lambda: make_env(DOMAIN, TASK) for _ in range(N_ENVS)])
     
-    # ✅ 关键技巧：Frame Stack (自动堆叠 3 帧，解决速度感知问题)
+    # 关键技巧：Frame Stack (自动堆叠 3 帧，解决速度感知问题)
     # SB3 的 VecFrameStack 会自动处理通道堆叠 (C*k, H, W)
     env = VecFrameStack(env, n_stack=3)
     
@@ -105,9 +101,9 @@ if __name__ == '__main__':
         gamma=0.99,
         gae_lambda=0.95,
         clip_range=0.2,
-        ent_coef=0.01,          # ✅ 加上熵奖励 (我们之前的经验)
+        ent_coef=0.01,          # 加上熵奖励 (我们之前的经验)
         vf_coef=0.5,
-        max_grad_norm=0.5,      # ✅ 默认开启梯度裁剪 (Actor 和 Critic 都会裁)
+        max_grad_norm=0.5,      # 默认开启梯度裁剪 (Actor 和 Critic 都会裁)
         tensorboard_log="./sb3_log/"
     )
     
